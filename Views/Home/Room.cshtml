@@ -1,0 +1,295 @@
+﻿
+@{
+    ViewData["Title"] = "Room";
+    var roomID = ViewBag.roomID;
+}
+
+@section HeaderContent {
+    <input type="text" id="inputLink"/>
+    <input type="button" id="sendLink" value=">" />
+}
+
+<div id="roomData" data-room-id="@roomID" style="display: none;"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/5.0.8/signalr.min.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+
+
+<div class="PageCont">
+    <div style="position: relative; width: 100%; height: 50%; padding-bottom: 10%;">
+        <video id="videoFrame" width="640" height="360" controls>
+
+        </video>
+    </div>
+
+    <div class="container">
+        <input type="button" id="SyncVideo" value="Синхронизировать видео" />
+        <input type="text" id="message"/>
+        <input type="button" id="sendmessage" value="Send" />
+        <input type="hidden" id="displayname" />
+        <ul id="discussion"></ul>
+
+        <div id="participantsContainer">
+            <h3>Участники:</h3>
+            <div id="participantsList"></div>
+        </div>
+    </div>
+</div>
+
+@section scripts {
+    <script src="~/js/public/script.js" type="text/javascript"></script>
+
+
+    <script>
+        /*
+
+        ЭТО ТЕСТОВЫЙ ВАРИАНТ ПРОГРАММЫ
+        1.Нужно добавить что-то по типу HSL
+        2. нормально расфосовать файлы
+
+        */
+
+
+
+        $(function () {
+            const roomConnect = getRoomIdFromUrl();
+            const connection = new signalR.HubConnectionBuilder()
+                .withUrl("/chatHub")
+                .build();
+
+            connection.on("addNewMessageToPage", function (name, message) {
+                $('#discussion').append('<li><strong>' + htmlEncode(name) + '</strong>: ' + htmlEncode(message) + '</li>');
+            });
+
+            let userName = '';
+            while (!userName) {
+                userName = prompt('Enter your name:', '');
+            }
+            // с передачей имени потом разберусь, мне лень честно
+
+            $('#displayname').val(userName);
+            $('#message').focus();
+
+
+            connection.start().then(function () {
+                return connection.invoke("JoinRoom", roomConnect, "");
+            }).then(function () {
+                $('#sendmessage').click(function () {
+                    if ($('#message').val() != "") {
+                        connection.invoke("Send", $('#displayname').val(), $('#message').val(), roomConnect).catch(function (err) {
+                            return console.error(err.toString());
+                        });
+                        $('#message').val('').focus();
+                    }
+                });
+            }).catch(function (err) {
+                return console.error(err.toString());
+            });
+
+            window.addEventListener('beforeunload', function (event) {
+                connection.invoke("LeaveRoom", roomConnect).catch(function (err) {
+                    return console.error(err.toString());
+                });
+            });
+
+
+            function htmlEncode(value) {
+                var encodedValue = $('<div />').text(value).html();
+                return encodedValue;
+            }
+
+            function getRoomIdFromUrl() {
+                var urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get('roomID');
+            }
+
+        });
+    </script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const videoUrlInput = document.getElementById('inputLink'); 
+            const processButton = document.getElementById('sendLink'); 
+            const player = document.getElementById('videoFrame');
+
+            const syncButton = document.getElementById('SyncVideo');
+            
+            const statusMessageElement = true;
+
+            let currentVideoUrl = null; 
+            let currentPlayerState = { isPlaying: false, currentTime: 0 };
+
+            const roomIdFromQuery = document.getElementById("roomData").getAttribute("data-room-id");
+
+            let currentRoomID = '';
+            let currentUserName = 'User' + Math.floor(Math.random() * 1000);
+
+            setRoom(roomIdFromQuery);
+
+            const signalRConnection = new signalR.HubConnectionBuilder()
+                .withUrl("/chatHub")
+                .configureLogging(signalR.LogLevel.Information)
+                .build();
+
+            function setRoom(roomIdFromUrl) {
+                currentRoomID = roomIdFromUrl;
+            }
+
+            syncButton.addEventListener('click', async () => {
+                const isPlaying = !player.paused; 
+                const currentTime = player.currentTime; 
+
+                await signalRConnection.invoke("SyncVideo", currentRoomID, currentVideoUrl, isPlaying, currentTime, currentUserName);
+            });
+
+            signalRConnection.on("SyncPlayerState", (roomId, isPlaying, currentTime, userName) => {
+                if (userName !== currentUserName) { 
+                    currentPlayerState.isPlaying = isPlaying;
+                    currentPlayerState.currentTime = currentTime;
+
+                    if (currentPlayerState.isPlaying) {
+                        player.currentTime = currentPlayerState.currentTime; 
+                        player.play().catch(err => console.warn("Ошибка воспроизведения:", err));
+                    } else {
+                        player.pause();
+                    }
+                }
+            });
+
+            function joinRoomIfConnected() { 
+                if (currentRoomID && signalRConnection.state === signalR.HubConnectionState.Connected) {
+                    signalRConnection.invoke("JoinRoom", currentRoomID, currentUserName)
+                        .then(() => console.log(`Присоединились к комнате: ${currentRoomID} как ${currentUserName}`))
+                        .catch(err => console.error(`Ошибка присоединения к комнате ${currentRoomID}: `, err));
+                } else if (!currentRoomID) {
+                    console.error("RoomID не определен!");
+                }
+            }
+
+            signalRConnection.on("ReceiveNewVideo", (videoUrl, userName) => {
+                currentVideoUrl = videoUrl; 
+                player.src = videoUrl; 
+                player.load();
+            });
+
+            const participantsList = document.getElementById('participantsList'); 
+
+            signalRConnection.on("UpdateParticipants", (participants) => {
+                participantsList.innerHTML = ''; 
+                participants.forEach(user => {
+                    const participantElement = document.createElement('div');
+                    participantElement.textContent = user; 
+                    participantsList.appendChild(participantElement); 
+                });
+            });
+
+
+            signalRConnection.on("UpdatePlayerState", (isPlaying, currentTimeSeconds, userNameWhoSynced) => {
+                if (userNameWhoSynced === currentUserName) return; 
+
+                console.log(`SignalR: Получено обновление состояния плеера от ${userNameWhoSynced}: играет=${isPlaying}, время=${currentTimeSeconds}`);
+                if (player) {
+                    if (Math.abs(player.currentTime - currentTimeSeconds) > 1.5) { 
+                        player.currentTime = currentTimeSeconds;
+                    }
+                    if (isPlaying && player.paused) {
+                        player.play().catch(e => console.warn("Ошибка авто-воспроизведения при синхронизации:", e));
+                    } else if (!isPlaying && !player.paused) {
+                        player.pause();
+                    }
+                }
+            });
+
+
+            async function startSignalRAndJoinRoom() {
+                try {
+                    await signalRConnection.start();
+                    console.log("SignalR: Подключение установлено.");
+                    joinRoomIfConnected(); 
+                } catch (err) {
+                    console.error("SignalR: Ошибка подключения:", err);
+                }
+            }
+            startSignalRAndJoinRoom();
+
+            if (processButton && videoUrlInput && player) {
+                processButton.addEventListener('click', async () => {
+                    if (!currentRoomID) {
+                        alert("Ошибка: не удалось определить текущую комнату. Обновите страницу.");
+                        return;
+                    }
+
+                    const videoUrlToDownload = videoUrlInput.value.trim();
+                    if (!videoUrlToDownload) {
+                        if (statusMessageElement) console.log('Пожалуйста, введите URL видео.');
+                        return;
+                    }
+
+                    processButton.disabled = true;
+                    if (statusMessageElement) console.log('Запрос на скачивание видео...');
+
+                    try {
+                        const response = await fetch('/download-video', { 
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ videoUrl: videoUrlToDownload }),
+                        });
+
+                        const result = await response.json();
+
+                        if (response.ok && result.success && result.videoUrl) {
+                            if (statusMessageElement) console.log('Видео скачано! Отправка ссылки в комнату...');
+                            console.log(`Видео скачано, URL: ${result.videoUrl}. Отправка в комнату ${currentRoomID} через SignalR.`);
+
+
+                            if (signalRConnection.state === signalR.HubConnectionState.Connected) {
+                                await signalRConnection.invoke("ChangeVideoInRoom", currentRoomID, result.videoUrl, currentUserName);
+
+                            } else {
+                                console.error("SignalR не подключен. Не могу отправить URL видео в комнату.");
+                                if (statusMessageElement) console.log('Ошибка: нет связи с сервером для синхронизации. Видео загружено локально.');
+
+                                player.src = result.videoUrl;
+                                player.load();
+                                player.play().catch(err => console.warn("Не удалось автоматически воспроизвести видео:", err));
+                            }
+                        } else {
+                            if (statusMessageElement) console.log(`Ошибка скачивания: ${result.message || 'Неизвестная ошибка.'}`);
+                            console.error('Ошибка от сервера скачивания (/download-video):', result.message);
+                        }
+                    } catch (error) {
+                        console.error('Критическая ошибка при запросе к /download-video:', error);
+                    } finally {
+                        processButton.disabled = false;
+                    }
+                });
+            } else {
+                console.error("Не найдены все необходимые элементы для управления видео (инпут, кнопка или плеер).");
+            }
+
+            if (player) {
+                let syncTimeout;
+                const syncDelay = 1500; 
+
+                const sendSyncState = () => {
+                    if (signalRConnection.state === signalR.HubConnectionState.Connected && currentRoomID) {
+                        console.log(`Отправка синхронизации: играет=${!player.paused}, время=${player.currentTime}`);
+                        signalRConnection.invoke("SyncPlayerState", currentRoomID, !player.paused, player.currentTime, currentUserName)
+                            .catch(err => console.error("Ошибка SyncPlayerState:", err));
+                    }
+                };
+
+                const scheduleSync = () => {
+                    clearTimeout(syncTimeout);
+                    syncTimeout = setTimeout(sendSyncState, syncDelay);
+                };
+
+                player.addEventListener('play', scheduleSync);
+                player.addEventListener('pause', scheduleSync);
+                player.addEventListener('seeked', scheduleSync); 
+            }
+
+        });
+    </script>
+
+}

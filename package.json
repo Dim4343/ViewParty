@@ -1,0 +1,22 @@
+{
+  "name": "viewparty",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "eslint": "^9.23.0"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "^8.0.7",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.1.0",
+    "youtube-dl-exec": "^3.0.21"
+  }
+}
